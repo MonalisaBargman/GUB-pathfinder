@@ -1,0 +1,133 @@
+\documentclass[12pt, a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{graphicx}
+\usepackage{hyperref}
+\usepackage{amsmath}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{float}
+
+% Code snippet styling setup
+\definecolor{codegreen}{rgb}{0,0.6,0}
+\definecolor{codegray}{rgb}{0.5,0.5,0.5}
+\definecolor{codepurple}{rgb}{0.58,0,0.82}
+\definecolor{backcolour}{rgb}{0.97,0.97,0.97}
+
+\lstdefinestyle{mystyle}{
+    backgroundcolor=\color{backcolour},   
+    commentstyle=\color{codegreen},
+    keywordstyle=\color{blue},
+    numberstyle=\tiny\color{codegray},
+    stringstyle=\color{codepurple},
+    basicstyle=\ttfamily\footnotesize,
+    breakatwhitespace=false,         
+    breaklines=true,                 
+    captionpos=b,                    
+    keepspaces=true,                 
+    numbers=left,                    
+    numbersep=5pt,                  
+    showspaces=false,                
+    showstringspaces=false,
+    showtabs=false,                  
+    tabsize=2
+}
+\lstset{style=mystyle}
+
+\title{\textbf{Campus Navigator: Pathfinding Simulation} \\ \large Detailed Algorithm and Architecture Report}
+\author{Project Documentation}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This report details the design, algorithmic logic, and software architecture of the \textit{Campus Navigator} project. The application serves as a high-performance web-based visualization tool for graph traversal and shortest-path calculation algorithms operating on a dense 2D grid matrix. By leveraging React for state hydration, HTML5 Canvas for rendering, and ES6 Generator functions for non-blocking algorithmic yielding, the system provides a smooth, 60-Frames-Per-Second (FPS) simulation engine capable of visualizing both Breadth-First Search (BFS) and Dijkstra's algorithm.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Introduction}
+Pathfinding on a 2D grid is a core concept in computer science, robotics, and game development. The goal of the \textit{Campus Navigator} project is to provide a fully interactive educational tool where a user can dynamically alter obstacle topologies, define custom "Danger Zones" (weighted terrain), and observe how different algorithms navigate this spatial data in real-time. 
+
+Building an interactive visualizer in a browser presents a specific technical challenge: executing computationally expensive loops (like exploring a $100 \times 200$ node graph) will inherently lock the browser's main thread. This report explains how the architecture was designed to visualize these algorithms frame-by-frame without compromising execution speed or UI responsiveness.
+
+\section{System Architecture}
+The system is designed as a Single Page Application (SPA) driven by React and TypeScript, leveraging modern web build tools (Vite). To ensure optimal maintainability, the application enforces a strict separation of concerns between visual orchestration and mathematical graph theory.
+
+\subsection{Component Structure}
+\begin{itemize}
+    \item \textbf{React UI Components}: (\texttt{ToolbarTop}, \texttt{ToolbarBottom}) Coordinate state updates, listen to user input, and manage playback variables (speed, algorithm selection).
+    \item \textbf{Mathematical Logic}: (\texttt{/lib/pathfinder.ts}) A pure mapping layer that performs the underlying queue processing. It has zero knowledge of the DOM or Canvas layer.
+    \item \textbf{Rendering Canvas}: (\texttt{MapCanvas.tsx}) Unidirectionally receives arrays of explored nodes and path coordinates and delegates drawing to the optimized \texttt{CanvasRenderingContext2D} API.
+\end{itemize}
+
+\section{Visual Rendering Strategy}
+A naive approach to grid rendering in React involves mapping a 2D array to HTML \texttt{<div>} elements. However, an environment spanning $100 \times 200$ cells equates to 20,000 individual DOM nodes. Hydrating and garbage collecting massive DOM updates per animation tick would cause severe framerate degradation.
+
+To resolve this, the visualization isolates rendering to two layered HTML5 Canvases:
+\begin{enumerate}
+    \item \textbf{Background Canvas}: A static layer that renders only once when a new map configuration is loaded. It paints the floor, walls (value \texttt{1}), and grid outlines.
+    \item \textbf{Foreground Canvas}: A dynamic, transparent layer cleared every animation frame. It loops precisely over the nodes currently flagged as "explored" or part of the "danger zones", minimizing GPU overdraw latency. 
+    \item \textbf{Resize Observer}: Responsiveness is handled via a \texttt{ResizeObserver} algorithm, dynamically inferring perfect cell multipliers based on bounded viewport calculations to present a pixel-perfect map fitted cleanly into any resolution footprint.
+\end{enumerate}
+
+\section{Algorithmic Mechanics}
+The core function of the application is navigating from node $A$ (Start) to node $B$ (End). Grids are abstracted as undirected graphs $G = (V, E)$, where $V$ represents valid (non-wall) coordinates $(x,y)$, and $O(1)$ edges exist connecting contiguous horizontal and vertical adjacencies.
+
+\subsection{Animation via ES6 Generators}
+Executing a conventional \texttt{while} loop for pathfinding calculates the answer instantly, preventing the visualization of the search footprint. 
+To visualize the expanding search frontier, algos are implemented as ES6 Generator (\texttt{function*}) constructs.
+
+\begin{lstlisting}[language=JavaScript, caption=Generator Structure for UI Yielding]
+export function* runSearch(start, end) {
+    const queue = [start];
+    const exploredBatch = [];
+    
+    while(queue.length > 0) {
+        let current = queue.shift();
+        // Identify valid neighbours...
+        exploredBatch.push(current);
+        
+        // Relinquish control back to the UI engine occasionally
+        if (exploredBatch.length >= batchSize) {
+            yield { explored: exploredBatch, path: null, found: false };
+            exploredBatch.length = 0; // Empty
+        }
+    }
+}
+\end{lstlisting}
+
+The React engine captures these \texttt{yield} responses via \texttt{requestAnimationFrame}, interpolating them at user-specified speeds, generating the expanding purple animation before calling \texttt{.next()} to resume execution.
+
+\subsection{Breadth-First Search (BFS)}
+BFS explores uniformly outwards. Assuming an unweighted environment, it guarantees the shortest path traversal mathematically.
+\begin{itemize}
+    \item \textbf{Data Structure}: Standard FIFO queue.
+    \item \textbf{Complexity}: Time complexity is $\mathcal{O}(V + E)$ where $V = w \times h$ cells, making it inherently optimal for plain-terrain exploration.
+    \item \textbf{Limitation}: Cannot identify varying terrain weights effectively; it blindly navigates through penalty-heavy "Danger Zones".
+\end{itemize}
+
+\subsection{Dijkstra's Algorithm}
+In environments containing heterogeneous terrain costs (e.g., "Danger Zones"), regular unweighted processing is flawed. Dijkstra's Algorithm is deployed to prioritize cumulative cost evaluation rather than mere grid distance.
+\begin{itemize}
+    \item \textbf{Mechanics}: Relies on a dynamic Priority Queue (min-heap formulation) mapping lowest known cumulative cost properties attached to the $V$ coordinate data map.
+    \item \textbf{Relaxation Strategy}: On exploring adjacencies, the algorithm establishes the edge cost evaluation:
+    \begin{equation}
+        c(u,v) = \text{Base Step (1)} + \text{Danger Zone Penalty (20)} 
+    \end{equation}
+    If the discovered edge yields a lower aggregate traversal cost than existing paths, the vertex distance maps are dynamically updated ("relaxed").
+    \item \textbf{Complexity}: Operates at bound $\mathcal{O}((V + E) \log V)$ given Priority Queue overhead, generating more complex path avoidance mechanisms explicitly routed around hazard zones. 
+\end{itemize}
+
+\section{Path Backtracking Protocol}
+Upon locating the targeted endpoint coordinates, a secondary sub-routine translates algorithmic discovery into geometric rendering primitives. Because each explored coordinate retains a pointer reference toward its preceding \texttt{parent} node object, path generation comprises reading references recursively backward from $B \rightarrow A$ and performing standard matrix reversal array operations to acquire the true shortest path segment mapping. This footprint converts instantly to \texttt{CanvasRenderingContext2D} linear graphical stroked segments, producing the bright green "found path" visualization mapping in the foreground buffer. 
+
+\section{Conclusion}
+The \textit{Campus Navigator} effectively tackles the complexity of blending sophisticated discrete mathematics traversing logic alongside non-blocking React DOM state hydration cycles. By harnessing ES6 generators, the implementation offloads processing execution states smoothly to interface animation queues, successfully converting static 2D arrays into highly responsive pathfinding demonstrations robust enough to handle varying topological grid matrices dynamically.
+
+\end{document}
